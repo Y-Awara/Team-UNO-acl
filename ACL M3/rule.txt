@@ -1,0 +1,101 @@
+Delivery Impact Rule
+
+Goal
+-----
+The goal of this rule is to estimate how much the delivery performance of each state affects the review scores of product categories. For each (state, category) pair we compute an “expected” review score based only on category popularity and delivery delay, and then compare this expectation with the actual average review score observed in that state and category.
+
+Definitions
+-----------
+
+1) ExpectedCategoryScore(category)
+   This is the baseline quality score of a product category, independent of state.
+   It is defined as the average review_score of all reviews for products that belong to this product_category_name, across all states.
+
+   ExpectedCategoryScore(c) = average(review_score)
+   over all reviews of products with product_category_name = c in the whole dataset.
+
+2) AvgDelay(state)
+   This is the average delivery delay for orders whose customer is in a specific state.
+
+   For each state s:
+   - Consider all orders o where the related Customer node is connected to State(s) via (Customer)-[:LOCATED_IN]->(State).
+   - Use the property delivery_delay_days on the Order node (delivered date − estimated date).
+   - Compute AvgDelay(s) as the average of delivery_delay_days over those orders (ignoring null values).
+
+3) NormalizedDelay(state)
+   To compare delays between states on the same scale, AvgDelay is normalized to a value between 0 and 1.
+
+   Let:
+      min_delay = minimum AvgDelay(s) over all states s
+      max_delay = maximum AvgDelay(s) over all states s
+
+   For each state s:
+
+      NormalizedDelay(s) =
+         ( AvgDelay(s) - min_delay ) / ( max_delay - min_delay )
+
+   Interpretation:
+   - The state with the smallest average delay has NormalizedDelay = 0 (best delivery).
+   - The state with the largest average delay has NormalizedDelay = 1 (worst delivery).
+   - Other states lie between 0 and 1 according to how bad their delay is.
+
+4) ExpectedScore(state, category)
+   This is the expected review score for a given (state, category) pair based only on:
+   - how well the category usually performs (ExpectedCategoryScore), and
+   - how good or bad delivery is in that state (NormalizedDelay).
+
+   For each state s and category c:
+
+      ExpectedScore(s, c) =
+         ExpectedCategoryScore(c) * (1 - NormalizedDelay(s))
+
+   Interpretation:
+   - If delivery in state s is the best (NormalizedDelay(s) = 0),
+     then ExpectedScore(s, c) = ExpectedCategoryScore(c).
+   - If delivery in state s is the worst (NormalizedDelay(s) = 1),
+     then ExpectedScore(s, c) = 0 (in theory, review scores are strongly penalised by poor delivery).
+   - For intermediate values, ExpectedScore is scaled down proportionally by the delivery quality of the state.
+
+5) AvgReviewScore(state, category)
+   This is the actual observed average review score for a given state and category.
+
+   For each state s and category c:
+
+      AvgReviewScore(s, c) =
+         average(review_score)
+         over all Review nodes that:
+           - are connected to an Order,
+           - that Order is placed by a Customer located in state s,
+           - and that Order contains OrderItems referring to Products of category c.
+
+   Only reviews with non-null review_score are considered.
+
+6) Improvement%(state, category)
+   This measures how much better or worse the actual average review score is compared to the expected score given delivery.
+
+   For each state s and category c:
+
+      Improvement%(s, c) =
+         ( AvgReviewScore(s, c) - ExpectedScore(s, c) )
+         / ExpectedScore(s, c)
+         * 100
+
+   Interpretation:
+   - If Improvement% > 0:
+       The actual average review score is higher than expected.
+       Customers are happier than predicted based on delivery performance alone.
+   - If Improvement% < 0:
+       The actual average review score is lower than expected.
+       Delivery performance alone cannot explain the poor reviews; other factors (e.g. product quality, seller service) may be problematic.
+   - If Improvement% ≈ 0:
+       The observed reviews match what we would expect given the state’s delivery performance.
+
+Edge Cases and Assumptions
+--------------------------
+1) If max_delay = min_delay (i.e., all states have the same average delivery delay), the denominator in the NormalizedDelay formula becomes zero. In this case, delivery does not differentiate between states. We therefore set NormalizedDelay(s) = 0 for all states, which implies:
+
+      ExpectedScore(s, c) = ExpectedCategoryScore(c) for all s, c.
+
+2) Only orders with non-null delivery_delay_days and reviews with non-null review_score are used in the corresponding averages.
+
+3) The rule is intended as an analytical tool, not a strict causal model. It allows us to see how much review differences between states and categories can be explained by delivery performance, and where other factors must be investigated.
